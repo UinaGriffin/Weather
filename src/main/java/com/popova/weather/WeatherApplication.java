@@ -9,6 +9,7 @@ import scala.Tuple2;
 import java.io.File;
 import java.util.Arrays;
 import java.util.List;
+import java.util.Optional;
 import java.util.OptionalDouble;
 import java.util.function.Function;
 import java.util.stream.Collectors;
@@ -19,11 +20,14 @@ public class WeatherApplication {
     private static final int NUMBER_OF_LINES_IN_HISTORICAL_FILE_HEADER = 7;
 
     public static void main(String[] args) {
+        String historicalFilesSourcePath = getArgument(args, 0).orElse("/data/historical");
+        String resultPath = getArgument(args, 1).orElse("/data/results");
+
         SparkConf conf = new SparkConf().setAppName("Weather Application").setMaster("local[4]");
 
         JavaSparkContext sc = new JavaSparkContext(conf);
 
-        List<String> historicalFileNames = getHistoricalFileNames();
+        List<String> historicalFileNames = getHistoricalFileNames(historicalFilesSourcePath);
 
         List<JavaRDD<String>> rawHistoricalDataRDDs = historicalFileNames.stream()
                 .map(hfn -> mapToRawHistoricalDataRDD(hfn, sc))
@@ -43,9 +47,28 @@ public class WeatherApplication {
 
         JavaRDD<String> aggregatedMonthlyRecordsAsCSVLines = aggregatedMonthlyRecords.map(WeatherApplication::monthlyRecordToCsvLine);
 
-        JavaRDD<String> result = aggregatedMonthlyRecordsAsCSVLines.cache();
-        result.repartition(1).saveAsTextFile("file:///data/results");
 
+        File resultDirectory = new File(resultPath);
+        if (resultDirectory.exists()) delete(resultDirectory);
+        aggregatedMonthlyRecordsAsCSVLines.repartition(1).saveAsTextFile("file://"+resultPath);
+
+    }
+
+    private static void delete(File f)  {
+        if (f.isDirectory()) {
+            for (File c : f.listFiles()) {
+                delete(c);
+            }
+        }
+        boolean deletedSuccessfully = f.delete();
+        if (!deletedSuccessfully) throw new RuntimeException("Failed to delete file: " + f);
+    }
+
+    private static Optional<String> getArgument(String[] args, int i) {
+        if(i>args.length-1) return Optional.empty();
+        String value = args[i];
+        if(value==null || value.trim().isEmpty()) return Optional.empty();
+        return Optional.of(value.trim());
     }
 
     private static String monthlyRecordToCsvLine(MonthlyRecord monthlyRecord) {
@@ -103,8 +126,8 @@ public class WeatherApplication {
         return firstMeaningfulToken.matches("\\d{4}");
     }
 
-    private static List<String> getHistoricalFileNames() {
-        File dataDirectory = new File("/data/historical");
+    private static List<String> getHistoricalFileNames(String historicalFilesSourcePath) {
+        File dataDirectory = new File(historicalFilesSourcePath);
         File[] historicalFiles = dataDirectory.listFiles();
         return Arrays.stream(historicalFiles)
                 .map(File::getAbsolutePath)
